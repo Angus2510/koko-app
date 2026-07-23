@@ -1,0 +1,291 @@
+// ─── Generator ────────────────────────────────────────────────────────────────
+
+generator client {
+  provider = "prisma-client-js"
+  output   = "../src/generated/client"
+}
+
+datasource db {
+  provider  = "postgresql"
+  url       = env("DATABASE_URL")
+  directUrl = env("DIRECT_URL")
+}
+
+// ─── Enums ────────────────────────────────────────────────────────────────────
+
+enum Role {
+  ADMINISTRATOR
+  PRODUCTION_MANAGER
+  STOREMAN
+  PRODUCTION_WORKER
+  SALES
+}
+
+enum JobStatus {
+  PENDING
+  IN_PROGRESS
+  STORED
+  FINISHED
+  ON_HOLD
+  CANCELLED
+}
+
+enum InventoryTransactionType {
+  RECEIVE
+  ISSUE
+  WASTE
+  ADJUSTMENT
+  RETURN
+}
+
+enum InventoryItemCategory {
+  RAW_MATERIAL
+  CONSUMABLE
+  PACKAGING
+  TOOL
+}
+
+// ─── Auth / Users ─────────────────────────────────────────────────────────────
+// id matches auth.users.id from Supabase — created automatically on sign-up
+// via a Supabase database trigger.
+
+model Profile {
+  id        String   @id
+  fullName  String
+  role      Role     @default(PRODUCTION_WORKER)
+  avatarUrl String?
+  active    Boolean  @default(true)
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  assignedProductionJobs ProductionJob[]        @relation("AssignedProductionJobs")
+  createdJobs           ProductionJob[]        @relation("CreatedJobs")
+  completedStageLogs    ProductionJobStageLog[] @relation("CompletedStageLogs")
+  inventoryTransactions InventoryTransaction[]
+  purchases             Purchase[]
+
+  @@map("profiles")
+}
+
+// ─── Production Stages ────────────────────────────────────────────────────────
+// Stages are database-driven and fully configurable.
+// isTerminal = true on "Stored" — triggers finished stock increment.
+
+model ProductionStage {
+  id         String   @id @default(cuid())
+  name       String   @unique
+  order      Int      @unique
+  color      String   @default("#6b7280")
+  isTerminal Boolean  @default(false)
+  createdAt  DateTime @default(now())
+
+  currentJobs ProductionJob[]
+  previousStageLogs ProductionJobStageLog[] @relation("PreviousStageLogs")
+  newStageLogs      ProductionJobStageLog[] @relation("NewStageLogs")
+
+  @@map("production_stages")
+}
+
+// ─── Products ─────────────────────────────────────────────────────────────────
+
+model ProductCategory {
+  id        String   @id @default(cuid())
+  name      String   @unique
+  createdAt DateTime @default(now())
+
+  products Product[]
+
+  @@map("product_categories")
+}
+
+model Product {
+  id          String   @id @default(cuid())
+  name        String
+  sku         String   @unique
+  categoryId  String
+  imageUrl    String?
+  description String?
+  active      Boolean  @default(true)
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  category       ProductCategory @relation(fields: [categoryId], references: [id])
+  recipeItems    RecipeItem[]
+  productionJobs ProductionJob[]
+  finishedStock  FinishedStock?
+
+  @@map("products")
+}
+
+model RecipeItem {
+  id              String  @id @default(cuid())
+  productId       String
+  inventoryItemId String
+  quantity        Decimal @db.Decimal(10, 4)
+  notes           String?
+
+  product       Product       @relation(fields: [productId], references: [id], onDelete: Cascade)
+  inventoryItem InventoryItem @relation(fields: [inventoryItemId], references: [id])
+
+  @@unique([productId, inventoryItemId])
+  @@map("recipe_items")
+}
+
+// ─── Inventory ────────────────────────────────────────────────────────────────
+
+model Supplier {
+  id          String   @id @default(cuid())
+  name        String
+  contactName String?
+  phone       String?
+  email       String?
+  address     String?
+  notes       String?
+  active      Boolean  @default(true)
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  inventoryItems InventoryItem[]
+  purchases      Purchase[]
+
+  @@map("suppliers")
+}
+
+model InventoryItem {
+  id              String                @id @default(uuid()) @db.Uuid
+  name            String
+  sku             String   @unique
+  category        InventoryItemCategory
+  unit            String
+  currentStock    Decimal               @default(0) @db.Decimal(10, 4)
+  minimumStock    Decimal               @db.Decimal(10, 4)
+  reorderQuantity Decimal?              @db.Decimal(10, 4)
+  supplierId      String?
+  storageLocation String
+  qrCode          String                @unique
+  image           String?
+  notes           String?
+  active          Boolean               @default(true)
+  createdAt       DateTime              @default(now())
+  updatedAt       DateTime              @updatedAt
+
+  supplier      Supplier?              @relation(fields: [supplierId], references: [id])
+  recipeItems   RecipeItem[]
+  transactions  InventoryTransaction[]
+  purchaseItems PurchaseItem[]
+
+  @@map("inventory_items")
+}
+
+// ─── Purchases ────────────────────────────────────────────────────────────────
+
+model Purchase {
+  id            String   @id @default(cuid())
+  supplierId    String
+  invoiceNumber String?
+  date          DateTime @default(now())
+  notes         String?
+  createdById   String
+  createdAt     DateTime @default(now())
+
+  supplier  Supplier       @relation(fields: [supplierId], references: [id])
+  createdBy Profile        @relation(fields: [createdById], references: [id])
+  items     PurchaseItem[]
+
+  @@map("purchases")
+}
+
+model PurchaseItem {
+  id              String  @id @default(cuid())
+  purchaseId      String
+  inventoryItemId String
+  quantity        Decimal @db.Decimal(10, 4)
+  unitCost        Decimal @db.Decimal(10, 2)
+
+  purchase      Purchase      @relation(fields: [purchaseId], references: [id], onDelete: Cascade)
+  inventoryItem InventoryItem @relation(fields: [inventoryItemId], references: [id])
+
+  @@map("purchase_items")
+}
+
+// ─── Inventory Transactions ───────────────────────────────────────────────────
+// Append-only ledger. currentStock on InventoryItem is always derived
+// from summing this table (or updated via application logic on each write).
+
+model InventoryTransaction {
+  id              String                   @id @default(uuid()) @db.Uuid
+  inventoryItemId String                   @db.Uuid
+  transactionType InventoryTransactionType
+  quantity        Decimal                  @db.Decimal(10, 4)
+  reason          String
+  notes           String?
+  referenceNumber String?
+  userId          String
+  createdAt       DateTime                 @default(now())
+  updatedAt       DateTime                 @updatedAt
+
+  inventoryItem InventoryItem @relation(fields: [inventoryItemId], references: [id])
+  user          Profile       @relation(fields: [userId], references: [id])
+
+  @@map("inventory_transactions")
+}
+
+// ─── Production ───────────────────────────────────────────────────────────────
+// jobNumber is a global auto-increment used to build the human-readable
+// display ID (JOB-2026-000001) without storing it as a string.
+
+model ProductionJob {
+  id             String    @id @default(uuid()) @db.Uuid
+  jobNumber      Int       @unique @default(autoincrement())
+  qrCode         String    @unique
+  productId      String
+  currentStageId String
+  assignedUserId String?
+  status         JobStatus @default(PENDING)
+  notes          String?
+  startedAt      DateTime  @default(now())
+  completedAt    DateTime?
+  createdById    String
+  createdAt      DateTime  @default(now())
+  updatedAt      DateTime  @updatedAt
+
+  product      Product                @relation(fields: [productId], references: [id])
+  currentStage ProductionStage        @relation(fields: [currentStageId], references: [id])
+  assignedUser Profile?               @relation("AssignedProductionJobs", fields: [assignedUserId], references: [id])
+  createdBy    Profile                @relation("CreatedJobs", fields: [createdById], references: [id])
+  stageLog     ProductionJobStageLog[]
+
+  @@map("production_jobs")
+}
+
+// Immutable log — one row per stage completion.
+model ProductionJobStageLog {
+  id              String    @id @default(uuid()) @db.Uuid
+  productionJobId String    @db.Uuid
+  previousStageId String?
+  newStageId      String
+  completedById   String?
+  notes           String?
+  createdAt       DateTime  @default(now())
+
+  productionJob ProductionJob   @relation(fields: [productionJobId], references: [id], onDelete: Cascade)
+  previousStage ProductionStage? @relation("PreviousStageLogs", fields: [previousStageId], references: [id])
+  newStage      ProductionStage  @relation("NewStageLogs", fields: [newStageId], references: [id])
+  completedBy   Profile?         @relation("CompletedStageLogs", fields: [completedById], references: [id])
+
+  @@map("production_job_stage_logs")
+}
+
+// ─── Finished Stock ───────────────────────────────────────────────────────────
+// Updated atomically when a job reaches a terminal stage.
+
+model FinishedStock {
+  id        String   @id @default(cuid())
+  productId String   @unique
+  quantity  Int      @default(0)
+  updatedAt DateTime @updatedAt
+
+  product Product @relation(fields: [productId], references: [id])
+
+  @@map("finished_stock")
+}

@@ -1,0 +1,29 @@
+{
+  "name": "koko-app",
+  "private": true,
+  "scripts": {
+    "build": "turbo build",
+    "dev": "concurrently -n web,mobile -c cyan,green \"pnpm dev:web\" \"pnpm dev:mobile\"",
+    "dev:web": "pnpm --filter @koko/web dev",
+    "dev:mobile": "pnpm --filter @koko/mobile dev",
+    "dev:all": "concurrently -n web,mobile -c cyan,green \"pnpm dev:web\" \"pnpm dev:mobile\"",
+    "lint": "turbo lint",
+    "type-check": "turbo type-check",
+    "db:generate": "pnpm --filter @koko/database db:generate",
+    "db:migrate": "pnpm --filter @koko/database db:migrate",
+    "db:push": "pnpm --filter @koko/database db:push",
+    "db:seed": "pnpm --filter @koko/database db:seed",
+    "db:studio": "pnpm --filter @koko/database db:studio"
+  },
+  "devDependencies": {
+    "concurrently": "^9.0.1",
+    "turbo": "^2.1.0",
+    "typescript": "~5.8.3",
+    "@types/node": "^22.0.0"
+  },
+  "engines": {
+    "node": ">=20.0.0",
+    "pnpm": ">=9.0.0"
+  },
+  "packageManager": "pnpm@9.9.0"
+}
